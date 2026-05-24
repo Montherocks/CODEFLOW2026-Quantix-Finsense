@@ -1,9 +1,24 @@
 .upload-container {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   background: #f0fdf4;
+  padding: 1rem;
+}
+
+.upload-header {
+  width: 100%;
+  max-width: 500px;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.upload-error {
+  color: #dc2626;
+  margin-top: 1rem;
 }
 
 .drop-zone {

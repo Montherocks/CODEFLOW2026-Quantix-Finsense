@@ -1,24 +1,63 @@
-import "./Dashboard.css";
+import SummaryCards from './SummaryCards.jsx';
+import './Dashboard.css';
 
-export default function Dashboard({ data }) {
+export default function Dashboard({ data, onNewAnalysis, onLogout, user }) {
+  const { summary, transactions } = data;
+
   return (
     <div className="dashboard">
-      <h1>Bank Dashboard</h1>
+      <header className="dashboard-header">
+        <div>
+          <h1>Your FinSense Dashboard</h1>
+          <p>{user?.email}</p>
+        </div>
+        <div className="dashboard-actions">
+          <button type="button" onClick={onNewAnalysis}>
+            Upload another
+          </button>
+          <button type="button" className="secondary" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
+      </header>
 
-      <div className="card">
-        <h2>Total Income</h2>
-        <p>₹{data.summary.totalIncome}</p>
-      </div>
+      <SummaryCards summary={summary} />
 
-      <div className="card">
-        <h2>Total Expenses</h2>
-        <p>₹{data.summary.totalExpenses}</p>
-      </div>
+      <section className="health-section">
+        <h2>Financial health</h2>
+        <div className="health-score">{summary.financialHealthScore}/100</div>
+      </section>
 
-      <div className="card">
-        <h2>Net Savings</h2>
-        <p>₹{data.summary.netSavings}</p>
-      </div>
+      <section className="txn-section">
+        <h2>Transactions ({transactions.length})</h2>
+        <div className="txn-table-wrap">
+          <table className="txn-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Date</th>
+                <th>Narration</th>
+                <th>Category</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((t) => (
+                <tr key={t.id ?? t.transactionHash}>
+                  <td>{t.id}</td>
+                  <td>{t.date}</td>
+                  <td>{t.narration}</td>
+                  <td>{t.category}</td>
+                  <td>
+                    {t.debit > 0 && `−₹${t.debit.toLocaleString('en-IN')}`}
+                    {t.credit > 0 && `+₹${t.credit.toLocaleString('en-IN')}`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
