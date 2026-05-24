@@ -1,8 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Upload, FileText, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-
-const API = "http://localhost:8080/api";
+import { api } from "@/lib/api";
 
 export interface StatementAnalysisBundle {
   summary: {
@@ -39,24 +38,7 @@ export function UploadZone({ onSuccess }: { onSuccess: (data: StatementAnalysisB
       setFileName(file.name);
       setUploading(true);
       try {
-        const fd = new FormData();
-        fd.append("file", file);
-        
-        // ── STEP 2 FIX: Pull token safely inside the client browser context lifecycle ──
-        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
-        
-        const res = await fetch(`${API}/upload`, { 
-          method: "POST", 
-          headers: {
-            // Appends the validation token to satisfy Spring Security
-            ...(token ? { "Authorization": `Bearer ${token}` } : {})
-          },
-          body: fd 
-        });
-        
-        if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-        
-        const data: StatementAnalysisBundle = await res.json();
+        const data = await api.uploadStatement(file);
         
         toast.success("Analysis complete", {
           description: `Processed ${data.summary?.transactionCount ?? 0} transactions via local XGBoost model.`,

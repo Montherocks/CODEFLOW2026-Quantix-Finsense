@@ -8,9 +8,12 @@ import com.quantix.finsense.repository.TransactionRepository;
 import com.quantix.finsense.security.CurrentUserService;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -18,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class StatementUploadService {
 
+    private static final Logger log = LoggerFactory.getLogger(StatementUploadService.class);
     private static final String UNCATEGORIZED = "Uncategorized";
 
     private final StatementParserService parserService;
@@ -38,6 +42,14 @@ public class StatementUploadService {
 
     @Transactional
     public UploadResponse process(MultipartFile file, String password) {
+        User user = currentUserService.requireCurrentUser();
+        log.info("process(user from SECURITY): user={} id={}", user.getEmail(), user.getId());
+        return process(file, password, user);
+    }
+
+    @Transactional
+    public UploadResponse process(MultipartFile file, String password, User user) {
+        log.info("process(user from CALLER): user={} id={}", user.getEmail(), user.getId());
         List<ParsedTransaction> parsed;
         try {
             parsed = parserService.parse(file, password);
@@ -51,20 +63,22 @@ public class StatementUploadService {
                     "success", "Statement uploaded but no transactions were found", 0, 0, 0, 0);
         }
 
-        User user = currentUserService.requireCurrentUser();
+        Set<String> existingHashes = transactionRepository.findExistingHashesForUser(
+                user.getId(),
+                parsed.stream().map(ParsedTransaction::transactionHash).collect(Collectors.toSet()));
+        log.info("process: existingHashes={}", existingHashes.size());
 
-        Set<String> hashes =
-                parsed.stream().map(ParsedTransaction::transactionHash).collect(Collectors.toSet());
-        Set<String> existingHashes = transactionRepository.findExistingHashes(hashes);
-
+        Set<String> seenInBatch = new HashSet<>();
         List<ParsedTransaction> newTransactions = new ArrayList<>();
         for (ParsedTransaction item : parsed) {
-            if (!existingHashes.contains(item.transactionHash())) {
+            String hash = item.transactionHash();
+            if (!existingHashes.contains(hash) && seenInBatch.add(hash)) {
                 newTransactions.add(item);
             }
         }
 
         int duplicateCount = parsedCount - newTransactions.size();
+        log.info("process: newTransactions={}, duplicateCount={}", newTransactions.size(), duplicateCount);
         if (newTransactions.isEmpty()) {
             return new UploadResponse(
                     "success",
@@ -87,7 +101,9 @@ public class StatementUploadService {
                 .toList();
 
         List<Transaction> categorized = analysisService.classifyTransactions(transactions).join();
+        log.info("process: categorized={}, first={}", categorized.size(), categorized.isEmpty() ? "N/A" : categorized.get(0).getCategory());
         transactionRepository.saveAll(categorized);
+        log.info("process: saved successfully");
 
         int uncategorizedCount = (int) categorized.stream()
                 .filter(t -> UNCATEGORIZED.equalsIgnoreCase(t.getCategory()))
