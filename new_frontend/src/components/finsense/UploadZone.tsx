@@ -1,10 +1,26 @@
 import { useCallback, useRef, useState } from "react";
 import { Upload, FileText, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/lib/api";
 
-const API = "http://localhost:8080/api";
+export interface StatementAnalysisBundle {
+  summary: {
+    aiOverview: string;
+    transactionCount: number;
+    totalIncome: number;
+    totalExpense: number;
+    breakdown: Record<string, number>;
+  };
+  transactions: Array<{
+    date: string;
+    narration: string;
+    amount: number;
+    type: 'DEBIT' | 'CREDIT';
+    category: string;
+  }>;
+}
 
-export function UploadZone({ onSuccess }: { onSuccess: () => void }) {
+export function UploadZone({ onSuccess }: { onSuccess: (data: StatementAnalysisBundle) => void }) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -22,15 +38,13 @@ export function UploadZone({ onSuccess }: { onSuccess: () => void }) {
       setFileName(file.name);
       setUploading(true);
       try {
-        const fd = new FormData();
-        fd.append("file", file);
-        const res = await fetch(`${API}/upload`, { method: "POST", body: fd });
-        if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-        const data = await res.json();
+        const data = await api.uploadStatement(file);
+        
         toast.success("Analysis complete", {
-          description: `Parsed ${data.parsedCount ?? 0} • Saved ${data.savedCount ?? 0} transactions`,
+          description: `Processed ${data.summary?.transactionCount ?? 0} transactions via local XGBoost model.`,
         });
-        onSuccess();
+        
+        onSuccess(data);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Upload failed";
         toast.error(msg);

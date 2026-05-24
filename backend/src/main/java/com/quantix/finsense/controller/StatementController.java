@@ -1,7 +1,9 @@
 package com.quantix.finsense.controller;
 
 import com.quantix.finsense.dto.UploadResponse;
+import com.quantix.finsense.entity.User;
 import com.quantix.finsense.exception.PdfEncryptedException;
+import com.quantix.finsense.security.CurrentUserService;
 import com.quantix.finsense.service.StatementUploadService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,9 +21,11 @@ import java.util.Map;
 public class StatementController {
 
     private final StatementUploadService uploadService;
+    private final CurrentUserService currentUserService;
 
-    public StatementController(StatementUploadService uploadService) {
+    public StatementController(StatementUploadService uploadService, CurrentUserService currentUserService) {
         this.uploadService = uploadService;
+        this.currentUserService = currentUserService;
     }
 
     @PostMapping("/upload")
@@ -34,7 +38,10 @@ public class StatementController {
         }
         
         try {
-            return ResponseEntity.ok(uploadService.process(file, password));
+            User user = currentUserService.requireCurrentUser();
+            uploadService.process(file, password, user);
+            Object aiSummaryDataBundle = uploadService.getStatementSummaryFromFlask(file, password);
+            return ResponseEntity.ok(aiSummaryDataBundle);
         } catch (PdfEncryptedException e) {
             return ResponseEntity.status(HttpStatus.LOCKED)
                     .body(Map.of("error", "LOCKED", "message", "This PDF is password protected."));

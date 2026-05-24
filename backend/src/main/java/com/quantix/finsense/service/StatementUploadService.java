@@ -8,9 +8,12 @@ import com.quantix.finsense.repository.TransactionRepository;
 import com.quantix.finsense.security.CurrentUserService;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -18,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class StatementUploadService {
 
+    private static final Logger log = LoggerFactory.getLogger(StatementUploadService.class);
     private static final String UNCATEGORIZED = "Uncategorized";
 
     private final StatementParserService parserService;
@@ -38,6 +42,14 @@ public class StatementUploadService {
 
     @Transactional
     public UploadResponse process(MultipartFile file, String password) {
+        User user = currentUserService.requireCurrentUser();
+        log.info("process(user from SECURITY): user={} id={}", user.getEmail(), user.getId());
+        return process(file, password, user);
+    }
+
+    @Transactional
+    public UploadResponse process(MultipartFile file, String password, User user) {
+        log.info("process(user from CALLER): user={} id={}", user.getEmail(), user.getId());
         List<ParsedTransaction> parsed;
         try {
             parsed = parserService.parse(file, password);
@@ -51,20 +63,22 @@ public class StatementUploadService {
                     "success", "Statement uploaded but no transactions were found", 0, 0, 0, 0);
         }
 
-        User user = currentUserService.requireCurrentUser();
+        Set<String> existingHashes = transactionRepository.findExistingHashesForUser(
+                user.getId(),
+                parsed.stream().map(ParsedTransaction::transactionHash).collect(Collectors.toSet()));
+        log.info("process: existingHashes={}", existingHashes.size());
 
-        Set<String> hashes =
-                parsed.stream().map(ParsedTransaction::transactionHash).collect(Collectors.toSet());
-        Set<String> existingHashes = transactionRepository.findExistingHashes(hashes);
-
+        Set<String> seenInBatch = new HashSet<>();
         List<ParsedTransaction> newTransactions = new ArrayList<>();
         for (ParsedTransaction item : parsed) {
-            if (!existingHashes.contains(item.transactionHash())) {
+            String hash = item.transactionHash();
+            if (!existingHashes.contains(hash) && seenInBatch.add(hash)) {
                 newTransactions.add(item);
             }
         }
 
         int duplicateCount = parsedCount - newTransactions.size();
+        log.info("process: newTransactions={}, duplicateCount={}", newTransactions.size(), duplicateCount);
         if (newTransactions.isEmpty()) {
             return new UploadResponse(
                     "success",
@@ -87,7 +101,9 @@ public class StatementUploadService {
                 .toList();
 
         List<Transaction> categorized = analysisService.classifyTransactions(transactions).join();
+        log.info("process: categorized={}, first={}", categorized.size(), categorized.isEmpty() ? "N/A" : categorized.get(0).getCategory());
         transactionRepository.saveAll(categorized);
+        log.info("process: saved successfully");
 
         int uncategorizedCount = (int) categorized.stream()
                 .filter(t -> UNCATEGORIZED.equalsIgnoreCase(t.getCategory()))
@@ -106,5 +122,50 @@ public class StatementUploadService {
     @Transactional
     public UploadResponse process(MultipartFile file) {
         return process(file, null);
+    }
+
+    public Object getStatementSummaryFromFlask(MultipartFile file, String password) {
+        // 1. Re-use your exact untouched parsing routine to get the transaction rows
+        List<ParsedTransaction> parsed;
+        try {
+            parsed = parserService.parse(file, password);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to read statement structures during summary generation", ex);
+        }
+
+        if (parsed.isEmpty()) {
+            return java.util.Map.of("error", "No transactions found to summarize.");
+        }
+
+        // 2. Format the payload into a raw structure matching what app.py expects
+        List<java.util.Map<String, Object>> flaskPayload = new ArrayList<>();
+        for (ParsedTransaction pt : parsed) {
+            java.util.Map<String, Object> txMap = new java.util.HashMap<>();
+            txMap.put("date", pt.date() != null ? pt.date().toString() : "");
+            txMap.put("narration", pt.narration() != null ? pt.narration() : "");
+            txMap.put("amount", pt.amount() != null ? pt.amount().doubleValue() : 0.0);
+            txMap.put("type", pt.type() != null ? pt.type().name() : "DEBIT");
+            flaskPayload.add(txMap);
+        }
+
+        // 3. Dispatch the payload via Spring's standard RestTemplate client
+        try {
+            String flaskUrl = "http://localhost:5000/api/analyze";
+            org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+            
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            
+            org.springframework.http.HttpEntity<List<java.util.Map<String, Object>>> entity = 
+                new org.springframework.http.HttpEntity<>(flaskPayload, headers);
+            
+            // Collect the composite response (XGBoost results + Gemini summary)
+            return restTemplate.postForObject(flaskUrl, entity, Object.class);
+        } catch (Exception e) {
+            return java.util.Map.of(
+                "error", "Flask connection failed",
+                "message", e.getMessage()
+            );
+        }
     }
 }
